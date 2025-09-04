@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Smart Task Manager</title>
+
+  <!-- Tailwind -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Chart.js for Analytics -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
+  <!-- jsPDF for Export -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+  <!-- Three.js background -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.min.js"></script>
+
+  <style>
+    :root { color-scheme: dark; }
+    body { margin: 0; overflow-x: hidden; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial; }
+
+    /* Glassmorphism */
+    .glass {
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 16px;
+      -webkit-backdrop-filter: blur(12px);
+      backdrop-filter: blur(12px);
+      box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+    }
+
+    #bgCanvas { position: fixed; inset: 0; z-index: -1; }
+
+    /* Loading dots */
+    .loading-dots span { animation: blink 1.5s infinite; opacity: 0; }
+    .loading-dots span:nth-child(1){animation-delay:0s;}
+    .loading-dots span:nth-child(2){animation-delay:0.3s;}
+    .loading-dots span:nth-child(3){animation-delay:0.6s;}
+    @keyframes blink { 0%,20%{opacity:0} 50%{opacity:1} 100%{opacity:0} }
+
+    /* Focus outlines */
+    :focus-visible { outline: 2px solid #38bdf8; outline-offset: 2px; }
+
+    /* Drag ghost cursor hint */
+    .dragging { opacity: 0.6; }
+
+    /* Sidebar active state */
+    .nav-active { background: rgba(56,189,248,0.15); border-color: rgba(56,189,248,0.35); }
+
+    /* Modal overlay */
+    .modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.65);
+      -webkit-backdrop-filter: blur(6px);
+      backdrop-filter: blur(6px);
+      
+      z-index: 50;
+      justify-content: center;
+      align-items: center;
+    }
+    .modal.show { display: flex; }
+
+    /* Priority pills */
+    .pill { border-radius: 9999px; padding: 2px 10px; font-size: 12px; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-200">
+
+  <!-- Animated Background -->
+  <canvas id="bgCanvas" aria-hidden="true"></canvas>
+
+  <!-- App Shell -->
+  <div class="min-h-screen grid grid-cols-12 gap-0">
+    <!-- Sidebar -->
+    <aside class="col-span-12 md:col-span-3 lg:col-span-2 p-4 md:p-6">
+      <div class="glass p-4 md:p-5">
+        <h1 class="text-2xl font-extrabold text-cyan-400 mb-4">⚡ Smart Task</h1>
+
+        <nav class="space-y-2" aria-label="Primary">
+          <button data-view="board" class="w-full text-left px-3 py-2 rounded-lg border border-slate-700 hover:border-cyan-400/40 hover:bg-cyan-400/10">📋 Tasks</button>
+          <button data-view="calendar" class="w-full text-left px-3 py-2 rounded-lg border border-slate-700 hover:border-cyan-400/40 hover:bg-cyan-400/10">📅 Calendar</button>
+          <button data-view="ai" class="w-full text-left px-3 py-2 rounded-lg border border-slate-700 hover:border-cyan-400/40 hover:bg-cyan-400/10">🤖 AI Planner</button>
+          <button data-view="analytics" class="w-full text-left px-3 py-2 rounded-lg border border-slate-700 hover:border-cyan-400/40 hover:bg-cyan-400/10">📊 Analytics</button>
+        </nav>
+
+        <hr class="my-4 border-slate-700/60">
+
+        <div class="space-y-2">
+          <button id="exportPdfBtn" class="w-full px-3 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-600">📄 Export PDF</button>
+
+          <button id="openNewTask" class="w-full px-3 py-2 rounded-lg bg-cyan-500 hover:bg-cyan-600">➕ New Task</button>
+
+          <div class="flex items-center justify-between mt-2">
+            <label for="voiceToggle" class="text-sm">AI Voice</label>
+            <input id="voiceToggle" type="checkbox" class="h-5 w-5 accent-cyan-400" aria-label="Toggle AI voice output">
+          </div>
+        </div>
+
+        <div class="mt-6">
+          <label for="searchBox" class="block text-sm mb-1">Quick Search</label>
+          <input id="searchBox" type="search" placeholder="Search tasks…" class="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 focus:border-cyan-400" />
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main -->
+    <main class="col-span-12 md:col-span-9 lg:col-span-10 p-4 md:p-6">
+      <!-- BOARD VIEW -->
+      <section id="view-board" class="glass p-4 md:p-6">
+        <header class="flex items-center justify-between mb-4">
+          <h2 class="text-xl font-semibold">Kanban Board</h2>
+          <div class="flex items-center gap-2">
+            <label for="filterPriority" class="sr-only">Filter by priority</label>
+            <select id="filterPriority" class="px-3 py-2 rounded-lg bg-slate-900 border border-slate-700">
+              <option value="">All Priorities</option>
+              <option value="high">High</option>
+              <option value="medium">Medium</option>
+              <option value="low">Low</option>
+            </select>
+
+            <label for="filterStatus" class="sr-only">Filter by status</label>
+            <select id="filterStatus" class="px-3 py-2 rounded-lg bg-slate-900 border border-slate-700">
+              <option value="">All Status</option>
+              <option value="todo">To-Do</option>
+              <option value="inprogress">In Progress</option>
+              <option value="done">Completed</option>
+            </select>
+          </div>
+        </header>
+
+        <div class="grid md:grid-cols-3 gap-4">
+          <div class="glass p-3" data-col="todo" aria-label="To-Do column" aria-dropeffect="move">
+            <div class="flex items-center justify-between mb-2">
+              <h3 class="font-semibold">To-Do</h3>
+              <span id="count-todo" class="text-xs text-slate-400">0</span>
+            </div>
+            <div id="col-todo" class="min-h-[200px] space-y-3" aria-live="polite"></div>
+          </div>
+
+          <div class="glass p-3" data-col="inprogress" aria-label="In-Progress column" aria-dropeffect="move">
+            <div class="flex items-center justify-between mb-2">
+              <h3 class="font-semibold">In Progress</h3>
+              <span id="count-inprogress" class="text-xs text-slate-400">0</span>
+            </div>
+            <div id="col-inprogress" class="min-h-[200px] space-y-3" aria-live="polite"></div>
+          </div>
+
+          <div class="glass p-3" data-col="done" aria-label="Done column" aria-dropeffect="move">
+            <div class="flex items-center justify-between mb-2">
+              <h3 class="font-semibold">Completed</h3>
+              <span id="count-done" class="text-xs text-slate-400">0</span>
+            </div>
+            <div id="col-done" class="min-h-[200px] space-y-3" aria-live="polite"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- CALENDAR VIEW -->
+      <section id="view-calendar" class="glass p-4 md:p-6 mt-6 hidden">
+        <h2 class="text-xl font-semibold mb-3">Compact Calendar</h2>
+        <div class="grid md:grid-cols-[220px_1fr] gap-4">
+          <div>
+            <label for="miniDate" class="block text-sm mb-1">Pick a date</label>
+            <input id="miniDate" type="date" class="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700"/>
+          </div>
+          <div>
+            <h3 class="font-semibold mb-2">Tasks on <span id="dateLabel">—</span></h3>
+            <ul id="dayTasks" class="space-y-2"></ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- AI VIEW -->
+      <section id="view-ai" class="glass p-4 md:p-6 mt-6 hidden">
+        <h2 class="text-xl font-semibold mb-3">AI Study Planner</h2>
+        <div class="grid md:grid-cols-[1fr_auto_auto] gap-2">
+          <div>
+            <label for="aiQuestion" class="sr-only">Ask AI</label>
+            <textarea id="aiQuestion" rows="3" placeholder="e.g. Plan a 1-week revision for Physics and Math with daily 2 hour blocks"
+              class="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700"></textarea>
+          </div>
+          <button id="askAiBtn" class="px-4 py-2 rounded-lg bg-purple-500 hover:bg-purple-600 self-start mt-1">Ask AI</button>
+          <button id="speechBtn" class="px-4 py-2 rounded-lg bg-pink-500 hover:bg-pink-600 self-start mt-1">🎤 Speak</button>
+        </div>
+        <div id="aiResponse" class="mt-4 p-3 rounded-lg bg-slate-900 min-h-[70px]"></div>
+        <div class="mt-3">
+          <button id="aiCreateTasks" class="px-4 py-2 rounded-lg bg-cyan-500 hover:bg-cyan-600 disabled:opacity-50" disabled>
+            ➕ Convert AI Plan to Tasks
+          </button>
+        </div>
+      </section>
+
+      <!-- ANALYTICS VIEW -->
+      <section id="view-analytics" class="glass p-4 md:p-6 mt-6 hidden">
+        <h2 class="text-xl font-semibold mb-4">Analytics</h2>
+        <div class="grid md:grid-cols-2 gap-6">
+          <div class="p-3 rounded-lg bg-slate-900">
+            <canvas id="chartProgress" height="200" aria-label="Weekly progress chart" role="img"></canvas>
+          </div>
+          <div class="p-3 rounded-lg bg-slate-900">
+            <canvas id="chartCategories" height="200" aria-label="Categories pie chart" role="img"></canvas>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- New Task Modal -->
+  <div id="taskModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="taskModalTitle">
+    <div class="glass p-5 w-[92%] max-w-md">
+      <h3 id="taskModalTitle" class="text-lg font-semibold mb-3">Create Task</h3>
+
+      <div class="space-y-3">
+        <div>
+          <label for="taskTitle" class="block text-sm mb-1">Title</label>
+          <input id="taskTitle" type="text" placeholder="Task title" class="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700"/>
+        </div>
+
+        <div>
+          <label for="taskDesc" class="block text-sm mb-1">Description</label>
+          <textarea id="taskDesc" rows="3" placeholder="What needs to be done?" class="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700"></textarea>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label for="taskDue" class="block text-sm mb-1">Due Date</label>
+            <input id="taskDue" type="date" class="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700"/>
+          </div>
+          <div>
+            <label for="taskPriority" class="block text-sm mb-1">Priority</label>
+            <select id="taskPriority" class="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700">
+              <option value="high">High</option>
+              <option value="medium" selected>Medium</option>
+              <option value="low">Low</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="flex justify-end gap-2 mt-5">
+        <button id="closeTaskModal" class="px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600">Cancel</button>
+        <button id="saveTask" class="px-4 py-2 rounded-lg bg-cyan-500 hover:bg-cyan-600">Save Task</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ----------------------------
+    // State & Utilities
+    // ----------------------------
+    const $ = (sel) => document.querySelector(sel);
+    const $$ = (sel) => document.querySelectorAll(sel);
+
+    const STORAGE_KEY = "stm.tasks.v1";
+    let tasks = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+    let aiLastText = "";
+
+    function saveTasks() {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
+      renderBoard();
+      renderCalendarDay();
+      renderCharts();
+    }
+
+    function uid() { return Math.random().toString(36).slice(2, 10); }
+
+    function priorityClass(p) {
+      if (p === "high") return "bg-red-500/20 text-red-300 border border-red-500/40";
+      if (p === "medium") return "bg-yellow-500/20 text-yellow-300 border border-yellow-500/40";
+      return "bg-green-500/20 text-green-300 border border-green-500/40";
+    }
+
+    function formatDate(d) {
+      if (!d) return "—";
+      try { return new Date(d).toLocaleDateString(); } catch { return d; }
+    }
+
+    // ----------------------------
+    // Navigation
+    // ----------------------------
+    const views = ["board","calendar","ai","analytics"];
+    const viewEls = {
+      board: $("#view-board"),
+      calendar: $("#view-calendar"),
+      ai: $("#view-ai"),
+      analytics: $("#view-analytics"),
+    };
+    function switchView(view) {
+      views.forEach(v => {
+        viewEls[v].classList.toggle("hidden", v !== view);
+      });
+      // mark active in sidebar
+      $$("aside nav button").forEach(btn=>{
+        btn.classList.toggle("nav-active", btn.dataset.view===view);
+      });
+    }
+    $$("aside nav button").forEach(btn => {
+      btn.addEventListener("click", () => switchView(btn.dataset.view));
+    });
+    switchView("board");
+
+    // ----------------------------
+    // Search & Filters
+    // ----------------------------
+    $("#searchBox").addEventListener("input", renderBoard);
+    $("#filterPriority").addEventListener("change", renderBoard);
+    $("#filterStatus").addEventListener("change", renderBoard);
+
+    // ----------------------------
+    // Modals
+    // ----------------------------
+    const taskModal = $("#taskModal");
+    $("#openNewTask").addEventListener("click", () => taskModal.classList.add("show"));
+    $("#closeTaskModal").addEventListener("click", () => taskModal.classList.remove("show"));
+    $("#saveTask").addEventListener("click", () => {
+      const title = $("#taskTitle").value.trim();
+      if (!title) { alert("Please enter a title."); return; }
+      const desc = $("#taskDesc").value.trim();
+      const due = $("#taskDue").value;
+      const priority = $("#taskPriority").value;
+
+      tasks.push({ id: uid(), title, desc, due, priority, status: "todo", createdAt: Date.now() });
+      taskModal.classList.remove("show");
+      $("#taskTitle").value = "";
+      $("#taskDesc").value = "";
+      $("#taskDue").value = "";
+      $("#taskPriority").value = "medium";
+      saveTasks();
+    });
+
+    // ----------------------------
+    // Board Rendering + DnD
+    // ----------------------------
+    function renderBoard() {
+      const query = $("#searchBox").value.toLowerCase();
+      const fPri = $("#filterPriority").value;
+      const fSta = $("#filterStatus").value;
+
+      const cols = { todo: $("#col-todo"), inprogress: $("#col-inprogress"), done: $("#col-done") };
+      Object.values(cols).forEach(c => c.innerHTML = "");
+
+      const filtered = tasks.filter(t => {
+        if (fPri && t.priority !== fPri) return false;
+        if (fSta && t.status !== fSta) return false;
+        const blob = (t.title + " " + (t.desc||"")).toLowerCase();
+        return blob.includes(query);
+      });
+
+      const counts = { todo:0, inprogress:0, done:0 };
+
+      filtered.forEach(task => {
+        const card = document.createElement("div");
+        card.className = "glass p-3 rounded-lg cursor-grab active:cursor-grabbing";
+        card.draggable = true;
+        card.dataset.id = task.id;
+
+        const pill = `<span class="pill ${priorityClass(task.priority)}">${task.priority}</span>`;
+        card.innerHTML = `
+          <div class="flex items-start justify-between gap-2">
+            <div>
+              <h4 class="font-semibold">${task.title}</h4>
+              <p class="text-sm text-slate-400">${task.desc || ""}</p>
+              <p class="text-xs mt-1 text-slate-400">Due: ${formatDate(task.due)}</p>
+            </div>
+            <div class="flex gap-1">
+              <button class="rounded-md px-2 py-1 text-xs bg-slate-800 hover:bg-slate-700" aria-label="Edit task">✏️</button>
+              <button class="rounded-md px-2 py-1 text-xs bg-rose-600 hover:bg-rose-700" aria-label="Delete task">🗑️</button>
+            </div>
+          </div>
+          <div class="mt-2">${pill}</div>
+        `;
+
+        // Edit / Delete
+        const [btnEdit, btnDel] = card.querySelectorAll("button");
+        btnEdit.addEventListener("click", () => openEdit(task.id));
+        btnDel.addEventListener("click", () => { tasks = tasks.filter(x => x.id !== task.id); saveTasks(); });
+
+        // Drag events
+        card.addEventListener("dragstart", (e)=>{ e.dataTransfer.setData("text/plain", task.id); card.classList.add("dragging"); });
+        card.addEventListener("dragend", ()=> card.classList.remove("dragging"));
+
+        cols[task.status].appendChild(card);
+        counts[task.status]++;
+      });
+
+      $("#count-todo").textContent = counts.todo;
+      $("#count-inprogress").textContent = counts.inprogress;
+      $("#count-done").textContent = counts.done;
+    }
+
+    function openEdit(id) {
+      const t = tasks.find(x => x.id === id);
+      if (!t) return;
+      // Reuse modal for quick edit
+      $("#taskModalTitle").textContent = "Edit Task";
+      $("#taskTitle").value = t.title;
+      $("#taskDesc").value = t.desc || "";
+      $("#taskDue").value = t.due || "";
+      $("#taskPriority").value = t.priority;
+      taskModal.classList.add("show");
+
+      const saveBtn = $("#saveTask");
+      const origHandler = saveBtn.onclick;
+      saveBtn.onclick = () => {
+        t.title = $("#taskTitle").value.trim() || t.title;
+        t.desc = $("#taskDesc").value.trim();
+        t.due = $("#taskDue").value;
+        t.priority = $("#taskPriority").value;
+        saveTasks();
+        taskModal.classList.remove("show");
+        $("#taskModalTitle").textContent = "Create Task";
+        saveBtn.onclick = origHandler; // restore
+      };
+    }
+
+    // Drop targets
+    $$("[data-col]").forEach(col => {
+      col.addEventListener("dragover", e => { e.preventDefault(); col.classList.add("ring-2","ring-cyan-400/60"); });
+      col.addEventListener("dragleave", () => col.classList.remove("ring-2","ring-cyan-400/60"));
+      col.addEventListener("drop", e => {
+        e.preventDefault();
+        col.classList.remove("ring-2","ring-cyan-400/60");
+        const id = e.dataTransfer.getData("text/plain");
+        const t = tasks.find(x => x.id === id);
+        if (t) { t.status = col.dataset.col; saveTasks(); }
+      });
+    });
+
+    // ----------------------------
+    // Calendar
+    // ----------------------------
+    const miniDate = $("#miniDate");
+    const dateLabel = $("#dateLabel");
+    const dayTasks = $("#dayTasks");
+
+    function renderCalendarDay() {
+      const d = miniDate.value || new Date().toISOString().slice(0,10);
+      dateLabel.textContent = new Date(d).toDateString();
+      dayTasks.innerHTML = "";
+      tasks.filter(t => t.due === d).forEach(t => {
+        const li = document.createElement("li");
+        li.className = "glass p-3 rounded-lg";
+        li.innerHTML = `<div class="flex justify-between">
+          <div>
+            <div class="font-semibold">${t.title}</div>
+            <div class="text-sm text-slate-400">${t.desc || ""}</div>
+          </div>
+          <span class="pill ${priorityClass(t.priority)}">${t.priority}</span>
+        </div>`;
+        dayTasks.appendChild(li);
+      });
+    }
+    miniDate.value = new Date().toISOString().slice(0,10);
+    miniDate.addEventListener("change", renderCalendarDay);
+
+    // ----------------------------
+    // Export PDF
+    // ----------------------------
+    $("#exportPdfBtn").addEventListener("click", () => {
+      const { jsPDF } = window.jspdf;
+      const doc = new jsPDF();
+      doc.setFontSize(16);
+      doc.text("Smart Task Manager - Tasks", 14, 18);
+      doc.setFontSize(12);
+      let y = 30;
+      tasks.forEach((t, i) => {
+        const line = `${i+1}. [${t.status}] ${t.title} (${t.priority}) - Due: ${t.due || "—"}`;
+        doc.text(line, 14, y);
+        y += 8;
+        if (t.desc) { doc.text("   " + t.desc.slice(0,80), 14, y); y += 8; }
+        if (y > 270) { doc.addPage(); y = 20; }
+      });
+      doc.save("tasks.pdf");
+    });
+
+    // ----------------------------
+    // AI Planner (Gemini backend)
+    // ----------------------------
+    const aiResponse = $("#aiResponse");
+    const voiceToggle = $("#voiceToggle");
+
+    $("#askAiBtn").addEventListener("click", async () => {
+      const q = $("#aiQuestion").value.trim();
+      if (!q) return;
+      aiResponse.innerHTML = `<span class="loading-dots">Thinking<span>.</span><span>.</span><span>.</span></span>`;
+      try {
+        const r = await fetch("http://localhost:5000/ask-ai", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ question: q })
+        });
+        const data = await r.json();
+        const text = data.answer || "⚠️ No response from AI.";
+        aiLastText = text;
+        aiResponse.textContent = text;
+
+        // Text-to-speech
+        if (voiceToggle.checked && "speechSynthesis" in window) {
+          const u = new SpeechSynthesisUtterance(text);
+          u.lang = "en-US";
+          window.speechSynthesis.cancel();
+          window.speechSynthesis.speak(u);
+        }
+        $("#aiCreateTasks").disabled = false;
+      } catch (e) {
+        aiResponse.textContent = "❌ Error reaching AI server.";
+        $("#aiCreateTasks").disabled = true;
+      }
+    });
+
+    // Convert AI plan into tasks (simple parser by lines)
+    $("#aiCreateTasks").addEventListener("click", () => {
+      if (!aiLastText) return;
+      const lines = aiLastText.split(/\n+/).map(s => s.trim()).filter(Boolean);
+      const today = new Date();
+      let dayOffset = 0;
+      lines.forEach(line => {
+        // crude parse: take up to 80 chars as title
+        const title = line.replace(/^\d+[\).\-\s]*/,"").slice(0,80) || "AI Task";
+        const due = new Date(today.getFullYear(), today.getMonth(), today.getDate() + dayOffset).toISOString().slice(0,10);
+        tasks.push({ id: uid(), title, desc: "From AI plan", due, priority: "medium", status: "todo", createdAt: Date.now() });
+        dayOffset = Math.min(dayOffset + 1, 6); // spread over a week
+      });
+      saveTasks();
+      alert("AI plan converted to tasks!");
+      switchView("board");
+    });
+
+    // Speech-to-text for AI question
+    $("#speechBtn").addEventListener("click", () => {
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SR) { alert("Speech recognition not supported in this browser."); return; }
+      const rec = new SR();
+      rec.lang = "en-US";
+      rec.start();
+      rec.onresult = (e) => { $("#aiQuestion").value = e.results[0][0].transcript; };
+    });
+
+    // ----------------------------
+    // Analytics (Chart.js)
+    // ----------------------------
+    let chartProgress, chartCategories;
+    function renderCharts() {
+      const ctx1 = $("#chartProgress");
+      const ctx2 = $("#chartCategories");
+
+      const byStatus = { todo:0, inprogress:0, done:0 };
+      const byCat = { High:0, Medium:0, Low:0 };
+      tasks.forEach(t=>{
+        byStatus[t.status] = (byStatus[t.status]||0)+1;
+        if (t.priority==="high") byCat.High++; else if (t.priority==="medium") byCat.Medium++; else byCat.Low++;
+      });
+
+      // destroy old
+      if (chartProgress) chartProgress.destroy();
+      if (chartCategories) chartCategories.destroy();
+
+      chartProgress = new Chart(ctx1, {
+        type: "bar",
+        data: {
+          labels: ["To-Do", "In-Progress", "Done"],
+          datasets: [{ label: "Tasks", data: [byStatus.todo, byStatus.inprogress, byStatus.done] }]
+        },
+        options: {
+          responsive: true,
+          plugins: { legend: { display:false } },
+          scales: { y: { beginAtZero: true } }
+        }
+      });
+
+      chartCategories = new Chart(ctx2, {
+        type: "pie",
+        data: {
+          labels: ["High","Medium","Low"],
+          datasets: [{ data: [byCat.High, byCat.Medium, byCat.Low] }]
+        },
+        options: { responsive: true }
+      });
+    }
+
+    // ----------------------------
+    // Calendar initialize & first render
+    // ----------------------------
+    renderBoard();
+    renderCalendarDay();
+    renderCharts();
+
+    // ----------------------------
+    // Three.js animated background
+    // ----------------------------
+    const bgCanvas = document.getElementById("bgCanvas");
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(70, window.innerWidth/window.innerHeight, 0.1, 1000);
+    const renderer = new THREE.WebGLRenderer({ canvas: bgCanvas, antialias:true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    camera.position.z = 6;
+
+    const geo = new THREE.BufferGeometry();
+    const COUNT = 800;
+    const pos = new Float32Array(COUNT * 3);
+    for (let i=0;i<COUNT*3;i++){ pos[i] = (Math.random()-0.5)*40; }
+    geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    const mat = new THREE.PointsMaterial({ size: 0.06, color: 0x00e0ff });
+    const stars = new THREE.Points(geo, mat);
+    scene.add(stars);
+
+    function animate() {
+      requestAnimationFrame(animate);
+      stars.rotation.y += 0.0009;
+      stars.rotation.x += 0.0003;
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    window.addEventListener("resize", ()=>{
+      camera.aspect = window.innerWidth/window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  </script>
+  <script src = "app.js"></script>
+</body>
+</html>
